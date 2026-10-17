@@ -1,0 +1,316 @@
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index 408cdefe..8c63b2a0 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -1,12 +1,9 @@
+-import com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension
+ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+ import java.util.Properties
+ 
+ plugins {
+     id("com.android.application")
+     id("dev.flutter.flutter-gradle-plugin")
+-    id("com.google.gms.google-services")
+-    id("com.google.firebase.crashlytics")
+ }
+ 
+ val localProperties = Properties().apply {
+@@ -80,10 +77,6 @@ android {
+                 getDefaultProguardFile("proguard-android-optimize.txt"),
+                 "proguard-rules.pro",
+             )
+-
+-            configure<CrashlyticsExtension> {
+-                nativeSymbolUploadEnabled = hasReleaseSigning
+-            }
+         }
+     }
+ 
+@@ -103,13 +96,6 @@ flutter {
+     source = "../.."
+ }
+ 
+-// The Crashlytics plugin finalizes R8 with the mapping upload but leaves the native symbol upload to the caller.
+-if (hasReleaseSigning) {
+-    tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+-        finalizedBy("uploadCrashlyticsSymbolFileRelease")
+-    }
+-}
+-
+ dependencies {
+     implementation(project(":service"))
+     implementation(project(":common"))
+@@ -119,9 +105,6 @@ dependencies {
+     implementation(libs.smali.dexlib2) {
+         exclude(group = "com.google.guava", module = "guava")
+     }
+-    implementation(platform(libs.firebase.bom))
+-    implementation(libs.firebase.crashlytics.ndk)
+-    implementation(libs.firebase.analytics)
+     testImplementation(libs.junit)
+     testImplementation(libs.kotlinx.coroutines.test)
+ }
+diff --git a/android/app/google-services.json b/android/app/google-services.json
+deleted file mode 100644
+index ec7efbe1..00000000
+--- a/android/app/google-services.json
++++ /dev/null
+@@ -1,65 +0,0 @@
+-{
+-  "project_info": {
+-    "project_number": "000000000000",
+-    "project_id": "dev"
+-  },
+-  "client": [
+-    {
+-      "client_info": {
+-        "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+-        "android_client_info": {
+-          "package_name": "com.follow.clash"
+-        }
+-      },
+-      "oauth_client": [],
+-      "api_key": [
+-        {
+-          "current_key": "0"
+-        }
+-      ],
+-      "services": {
+-        "appinvite_service": {
+-          "other_platform_oauth_client": []
+-        }
+-      }
+-    },
+-    {
+-      "client_info": {
+-        "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+-        "android_client_info": {
+-          "package_name": "com.follow.clash.debug"
+-        }
+-      },
+-      "oauth_client": [],
+-      "api_key": [
+-        {
+-          "current_key": "0"
+-        }
+-      ],
+-      "services": {
+-        "appinvite_service": {
+-          "other_platform_oauth_client": []
+-        }
+-      }
+-    },
+-    {
+-      "client_info": {
+-        "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+-        "android_client_info": {
+-          "package_name": "com.follow.clash.dev"
+-        }
+-      },
+-      "oauth_client": [],
+-      "api_key": [
+-        {
+-          "current_key": "0"
+-        }
+-      ],
+-      "services": {
+-        "appinvite_service": {
+-          "other_platform_oauth_client": []
+-        }
+-      }
+-    }
+-  ]
+-}
+\ No newline at end of file
+diff --git a/android/common/build.gradle.kts b/android/common/build.gradle.kts
+index 352920b3..32d4f5b0 100644
+--- a/android/common/build.gradle.kts
++++ b/android/common/build.gradle.kts
+@@ -32,8 +32,5 @@ kotlin {
+ dependencies {
+     implementation(libs.androidx.core)
+     implementation(libs.gson)
+-    implementation(platform(libs.firebase.bom))
+-    implementation(libs.firebase.crashlytics.ndk)
+-    implementation(libs.firebase.analytics)
+     testImplementation(libs.junit)
+ }
+diff --git a/android/common/src/main/java/com/follow/clash/common/GlobalState.kt b/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
+index 8e1f00f2..9c87c89b 100644
+--- a/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
++++ b/android/common/src/main/java/com/follow/clash/common/GlobalState.kt
+@@ -4,8 +4,6 @@ import android.app.ActivityManager
+ import android.app.Application
+ import android.os.Build
+ import android.util.Log
+-import com.google.firebase.FirebaseApp
+-import com.google.firebase.crashlytics.FirebaseCrashlytics
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.SupervisorJob
+@@ -36,18 +34,10 @@ object GlobalState : CoroutineScope by CoroutineScope(SupervisorJob() + Dispatch
+         Log.d("FlClash", text)
+     }
+ 
+-    fun setCrashlytics(enable: Boolean) {
+-        FirebaseApp.initializeApp(application)
+-        FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = enable
+-        if (enable) {
+-            log("Crashlytics enabled")
+-        }
+-    }
++    @Suppress("UNUSED_PARAMETER")
++    fun setCrashlytics(enable: Boolean) = Unit
+ 
+-    fun didCrashOnPreviousExecution(): Boolean {
+-        FirebaseApp.initializeApp(application)
+-        return FirebaseCrashlytics.getInstance().didCrashOnPreviousExecution()
+-    }
++    fun didCrashOnPreviousExecution(): Boolean = false
+ 
+     fun lastExitInfo(): Map<String, Any?>? {
+         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+diff --git a/android/gradle/libs.versions.toml b/android/gradle/libs.versions.toml
+index 905a04a9..2fa9e7a8 100644
+--- a/android/gradle/libs.versions.toml
++++ b/android/gradle/libs.versions.toml
+@@ -1,5 +1,4 @@
+ [versions]
+-firebaseBom = "34.19.0"
+ minSdk = "24"
+ targetSdk = "37"
+ compileSdk = "37"
+@@ -14,9 +13,6 @@ kotlinxCoroutines = "1.11.0"
+ [libraries]
+ androidx-core = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+ core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "coreSplashscreen" }
+-firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
+-firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+-firebase-crashlytics-ndk = { module = "com.google.firebase:firebase-crashlytics-ndk" }
+ gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+ junit = { module = "junit:junit", version.ref = "junit" }
+ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+diff --git a/android/settings.gradle.kts b/android/settings.gradle.kts
+index c4f8f103..90e45d70 100644
+--- a/android/settings.gradle.kts
++++ b/android/settings.gradle.kts
+@@ -21,8 +21,6 @@ plugins {
+     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
+     id("com.android.application") version "9.4.1" apply false
+     id("org.jetbrains.kotlin.android") version "2.4.20" apply false
+-    id("com.google.gms.google-services") version "4.5.0" apply false
+-    id("com.google.firebase.crashlytics") version "3.0.8" apply false
+ }
+ 
+ include(":app")
+diff --git a/lib/bootstrap.dart b/lib/bootstrap.dart
+index 830f500f..87303e3f 100644
+--- a/lib/bootstrap.dart
++++ b/lib/bootstrap.dart
+@@ -238,7 +238,7 @@ class Bootstrap {
+   }
+ 
+   Future<void> _showCrashlyticsTip() async {
+-    if (!system.isAndroid) return;
++    if (!system.isAndroid || !firebaseEnabled) return;
+     if (_container.read(
+       appSettingProvider.select((state) => state.crashlyticsTip),
+     )) {
+diff --git a/lib/common/constant.dart b/lib/common/constant.dart
+index 401541e2..882f39fc 100644
+--- a/lib/common/constant.dart
++++ b/lib/common/constant.dart
+@@ -9,6 +9,7 @@ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
+ import 'package:material_ui/material_ui.dart';
+ 
++const firebaseEnabled = false;
+ const appName = 'FlClash';
+ const appHelperService = 'FlClashHelperService';
+ const coreManifestName = 'manifest.json';
+diff --git a/lib/views/config/general.dart b/lib/views/config/general.dart
+index 4b830976..4abeaafb 100644
+--- a/lib/views/config/general.dart
++++ b/lib/views/config/general.dart
+@@ -413,7 +413,7 @@ class GeneralView extends ConsumerWidget {
+         select: (state) => state.openLogs,
+         update: (state, value) => state.copyWith(openLogs: value),
+       ),
+-      if (system.isAndroid)
++      if (system.isAndroid && firebaseEnabled)
+         _appSettingToggle(
+           title: (l) => l.crashlytics,
+           select: (state) => state.crashlytics,
+@@ -480,7 +480,8 @@ class GeneralView extends ConsumerWidget {
+             items: _logItems(),
+             footer: [
+               appLocalizations.logcatDesc,
+-              if (system.isAndroid) appLocalizations.crashlyticsTip,
++              if (system.isAndroid && firebaseEnabled)
++                appLocalizations.crashlyticsTip,
+             ].join('\n'),
+           ),
+         ],
+diff --git a/lib/views/disclaimer.dart b/lib/views/disclaimer.dart
+index 09399b0c..1c875c74 100644
+--- a/lib/views/disclaimer.dart
++++ b/lib/views/disclaimer.dart
+@@ -150,31 +150,33 @@ class DisclaimerView extends StatelessWidget {
+         title: appLocalizations.disclaimerPrivacyTitle,
+         content: appLocalizations.disclaimerPrivacyContent,
+         children: [
+-          _DataServiceCard(
+-            glyph: AppGlyphs.error,
+-            title: appLocalizations.disclaimerCrashlyticsTitle,
+-            content: appLocalizations.disclaimerCrashlyticsContent,
+-          ),
+-          _DataServiceCard(
+-            glyph: AppGlyphs.dataUsage,
+-            title: appLocalizations.disclaimerAnalyticsTitle,
+-            content: appLocalizations.disclaimerAnalyticsContent,
+-          ),
+-          _TermParagraphs(appLocalizations.disclaimerDataProcessingContent),
+-          Wrap(
+-            spacing: 8,
+-            runSpacing: 8,
+-            children: [
+-              _PolicyLink(
+-                label: appLocalizations.disclaimerGooglePrivacy,
+-                url: _googlePrivacyUrl,
+-              ),
+-              _PolicyLink(
+-                label: appLocalizations.disclaimerFirebasePrivacy,
+-                url: _firebasePrivacyUrl,
+-              ),
+-            ],
+-          ),
++          if (firebaseEnabled) ...[
++            _DataServiceCard(
++              glyph: AppGlyphs.error,
++              title: appLocalizations.disclaimerCrashlyticsTitle,
++              content: appLocalizations.disclaimerCrashlyticsContent,
++            ),
++            _DataServiceCard(
++              glyph: AppGlyphs.dataUsage,
++              title: appLocalizations.disclaimerAnalyticsTitle,
++              content: appLocalizations.disclaimerAnalyticsContent,
++            ),
++            _TermParagraphs(appLocalizations.disclaimerDataProcessingContent),
++            Wrap(
++              spacing: 8,
++              runSpacing: 8,
++              children: [
++                _PolicyLink(
++                  label: appLocalizations.disclaimerGooglePrivacy,
++                  url: _googlePrivacyUrl,
++                ),
++                _PolicyLink(
++                  label: appLocalizations.disclaimerFirebasePrivacy,
++                  url: _firebasePrivacyUrl,
++                ),
++              ],
++            ),
++          ],
+         ],
+       ),
+       for (final (index, term) in trailingTerms.indexed)

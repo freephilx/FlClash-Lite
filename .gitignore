@@ -1,0 +1,13 @@
+.build/
+dist/
+__pycache__/
+*.pyc
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.apk
+*.idsig
+.DS_Store
+.env
+*.password

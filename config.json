@@ -1,0 +1,8 @@
+{
+  "upstream_repository": "chen08209/FlClash",
+  "destination_repository": "freephilx/FlClash-Lite",
+  "application_id": "com.follow.clash.v1",
+  "first_release": "v0.9.0",
+  "key_alias": "flclashx",
+  "certificate_sha256": "938c3ca37748aaf6ffcbe9cb64b6cf80022d1a66673f559d49a1903180b603fb"
+}

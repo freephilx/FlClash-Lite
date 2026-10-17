@@ -1,0 +1,159 @@
+name: Sync FlClash releases
+
+on:
+  schedule:
+    - cron: '19 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag; leave empty to find the next changed release'
+        required: false
+        type: string
+      publish:
+        description: 'Publish after building and verifying all attachments'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flclashx-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test release tooling
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Find next upstream release
+        id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          args = ['python3', 'scripts/release.py', 'plan']
+          if os.environ.get('REQUESTED_TAG'):
+              args += ['--tag', os.environ['REQUESTED_TAG']]
+          subprocess.run(args, check=True)
+          plan = json.loads(Path('.build/plan.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'changed={str(plan is not None).lower()}\n')
+          PY
+
+      - name: Prepare exact source and apply patches
+        if: steps.plan.outputs.changed == 'true'
+        id: source
+        run: |
+          git submodule update --init upstream
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          plan = json.loads(Path('.build/plan.json').read_text())
+          subprocess.run(['python3', 'scripts/project.py', 'prepare', '--ref', plan['upstream']['tag_name']], check=True)
+          workflow = Path('.build/source/.github/workflows/build.yaml').read_text()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for name in ('FLUTTER_VERSION', 'GO_VERSION', 'NDK_VERSION'):
+                  value = re.search(rf"^  {name}: ['\"]?([A-Za-z0-9.]+)", workflow, re.M).group(1)
+                  output.write(f'{name.lower()}={value}\n')
+          PY
+
+      - name: Free runner disk for native builds
+        if: steps.plan.outputs.changed == 'true'
+        run: |
+          runner_sdk_directory="${ANDROID_HOME:?Runner Android SDK is required}"
+          sudo rm -rf /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf "$runner_sdk_directory/ndk" "$runner_sdk_directory/system-images"
+          df -h .
+
+      - uses: actions/setup-java@v4
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-go@v5
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          go-version: ${{ steps.source.outputs.go_version }}
+          cache-dependency-path: .build/source/core/go.sum
+
+      - uses: subosito/flutter-action@v2
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          channel: stable
+          flutter-version: ${{ steps.source.outputs.flutter_version }}
+          cache: true
+
+      - uses: android-actions/setup-android@v3
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - uses: nttld/setup-ndk@v1
+        if: steps.plan.outputs.changed == 'true'
+        id: ndk
+        with:
+          ndk-version: ${{ steps.source.outputs.ndk_version }}
+          link-to-sdk: true
+
+      - name: Validate Flutter source
+        if: steps.plan.outputs.changed == 'true'
+        run: python3 scripts/project.py check
+
+      - name: Decode release key and build Android
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FLCLASHX_KEYSTORE_BASE64 }}
+          FLCLASHX_STORE_PASSWORD: ${{ secrets.FLCLASHX_STORE_PASSWORD }}
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, subprocess
+          from pathlib import Path
+          key = Path(os.environ['RUNNER_TEMP']) / 'flclashx-release.p12'
+          if not os.environ.get('KEYSTORE_BASE64') or not os.environ.get('FLCLASHX_STORE_PASSWORD'):
+              raise SystemExit('Release signing secrets are required')
+          key.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'], validate=True))
+          key.chmod(0o600)
+          try:
+              plan = json.loads(Path('.build/plan.json').read_text())
+              args = ['python3', 'scripts/project.py', 'build']
+              if plan['upstream']['prerelease']:
+                  args.append('--prerelease')
+              subprocess.run(args, env={**os.environ, 'FLCLASHX_KEYSTORE': str(key)}, check=True)
+          finally:
+              key.unlink(missing_ok=True)
+          PY
+
+      - name: Copy and verify all upstream attachments
+        if: steps.plan.outputs.changed == 'true'
+        run: python3 scripts/release.py assemble
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          name: verified-release
+          path: dist/
+          retention-days: 7
+          compression-level: 0
+
+      - name: Publish complete release
+        if: steps.plan.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.publish)
+        run: python3 scripts/release.py publish
