@@ -92,11 +92,18 @@ def patches_for(tag):
     match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?', tag)
     if not match:
         raise ValueError('Expected an upstream release tag such as v0.9.1')
-    version = (*map(int, match.group(1, 2, 3)), match[4] is None)
+    version = tuple(map(int, match.group(1, 2, 3)))
+    release_version = (*version, match[4] is None)
     directory = ROOT / 'patches'
-    if version < (0, 9, 1, True):
+    if release_version < (0, 9, 1, True):
         directory = directory / 'legacy/v0.9.0'
-    patches = sorted(directory.glob('*.patch'))
+        patches = sorted(directory.glob('*.patch'))
+    else:
+        patches_by_name = {path.name: path for path in directory.glob('*.patch')}
+        versioned = directory / f'v{version[0]}.{version[1]}.{version[2]}'
+        if versioned.is_dir():
+            patches_by_name.update({path.name: path for path in versioned.glob('*.patch')})
+        patches = sorted(patches_by_name.values(), key=lambda path: path.name)
     if not patches:
         raise ValueError(f'No source patches configured for {tag}')
     return patches

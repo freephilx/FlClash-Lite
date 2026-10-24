@@ -1,12 +1,14 @@
 # 定制补丁
 
-v0.9.1 正式版及之后版本只应用本目录中的三个补丁：
+v0.9.1 正式版及之后版本只应用本目录中的三个补丁。上游源码发生不兼容的版本，会在对应的 `vX.Y.Z/` 子目录覆盖需要调整的同名补丁；未覆盖的补丁继续使用本目录版本：
 
 | 补丁 | 作用 |
 | --- | --- |
 | `001-android-package.patch` | 将 Android applicationId 替换为构建配置中固定的 `com.follow.clash.v1`。 |
 | `003-remove-startup-disclaimer.patch` | 移除首次启动的强制声明确认，保留“工具 → 免责声明”查看入口。 |
 | `004-update-repository.patch` | 将更新检查、API 限流时的备用查询、“前往下载”及“关于”页项目链接指向 `freephilx/FlClash-Lite`。 |
+
+`v0.9.2/003-remove-startup-disclaimer.patch` 适配 v0.9.2 新增的无人值守免责声明环境变量逻辑，`v0.9.2/004-update-repository.patch` 适配常量文件新增内容；其余补丁继续复用通用版本。
 
 构建保留上游的隐私说明，不额外修改统计、崩溃上报或代理功能代码。独立签名通过构建脚本注入。
 

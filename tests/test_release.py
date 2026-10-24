@@ -35,7 +35,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(all(path.parent == legacy for path in old))
         self.assertTrue((legacy / 'prepare.py').is_file())
         self.assertEqual(project.patches_for('v0.9.1-pre.1'), old)
-        for tag in ('v0.9.1', 'v0.9.2-pre.1', 'v0.10.0', 'v1.0.0'):
+        for tag in ('v0.9.1', 'v0.10.0', 'v1.0.0'):
             with self.subTest(tag=tag):
                 patches = project.patches_for(tag)
                 self.assertEqual([path.name for path in patches], [
@@ -44,6 +44,16 @@ class ReleaseTests(unittest.TestCase):
                 ])
                 self.assertTrue(all(path.parent == project.ROOT / 'patches' for path in patches))
                 self.assertFalse((patches[0].parent / 'prepare.py').exists())
+        for tag in ('v0.9.2-pre.1', 'v0.9.2'):
+            with self.subTest(tag=tag):
+                patches = project.patches_for(tag)
+                self.assertEqual([path.name for path in patches], [
+                    '001-android-package.patch', '003-remove-startup-disclaimer.patch',
+                    '004-update-repository.patch',
+                ])
+                self.assertEqual(patches[0].parent, project.ROOT / 'patches')
+                self.assertEqual(patches[1].parent, project.ROOT / 'patches/v0.9.2')
+                self.assertEqual(patches[2].parent, project.ROOT / 'patches/v0.9.2')
         with self.assertRaises(ValueError):
             project.patches_for('../main')
 
