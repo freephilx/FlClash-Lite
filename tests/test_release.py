@@ -54,6 +54,16 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(patches[0].parent, project.ROOT / 'patches')
                 self.assertEqual(patches[1].parent, project.ROOT / 'patches/v0.9.2')
                 self.assertEqual(patches[2].parent, project.ROOT / 'patches/v0.9.2')
+        for tag in ('v0.9.3-pre.1', 'v0.9.3'):
+            with self.subTest(tag=tag):
+                patches = project.patches_for(tag)
+                self.assertEqual([path.name for path in patches], [
+                    '001-android-package.patch', '003-remove-startup-disclaimer.patch',
+                    '004-update-repository.patch',
+                ])
+                self.assertEqual(patches[0].parent, project.ROOT / 'patches')
+                self.assertEqual(patches[1].parent, project.ROOT / 'patches/v0.9.3')
+                self.assertEqual(patches[2].parent, project.ROOT / 'patches/v0.9.3')
         with self.assertRaises(ValueError):
             project.patches_for('../main')
 

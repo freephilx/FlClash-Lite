@@ -1,0 +1,9 @@
+diff --git a/lib/common/constant.dart b/lib/common/constant.dart
+index f5b22e04..6f8b94f8 100644
+--- a/lib/common/constant.dart
++++ b/lib/common/constant.dart
+@@ -123,3 +123,3 @@ const appliedConfigMd5Key = 'applied_config_md5';
+ const defaultSystemDnsFallback = '223.5.5.5';
+-const repository = 'chen08209/FlClash';
++const repository = 'freephilx/FlClash-Lite';
+ const maxMobileWidth = 600;
