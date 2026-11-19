@@ -33,6 +33,20 @@ def release_fingerprint(release):
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
+def android_apk_sources(release):
+    version = release['tag_name'].removeprefix('v').split('-')[0]
+    legacy = {f'FlClash-{version}-android-{abi}.apk': f'FlClash-{version}-android-{abi}.apk'
+              for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64')}
+    modern = {f'FlClash-dev-{version}-android-{arch}.apk': f'FlClash-{version}-android-{abi}.apk'
+              for arch, abi in (('arm64', 'arm64-v8a'), ('armv7', 'armeabi-v7a'), ('amd64', 'x86_64'))}
+    names = {asset['name'] for asset in release['assets'] if asset['name'].endswith('.apk')}
+    if names == set(legacy):
+        return legacy
+    if names == legacy.keys() | modern.keys():
+        return {**legacy, **modern}
+    raise ValueError('Expected the upstream Android APKs for all three supported ABIs')
+
+
 def validate_release(release):
     if release['draft'] or not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', release['tag_name']):
         raise ValueError('Only published version-tagged releases are supported')
@@ -42,16 +56,13 @@ def validate_release(release):
     for name in names:
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]*', name):
             raise ValueError(f'Unsafe asset filename: {name}')
-    apks = [name for name in names if name.endswith('.apk')]
+    android_apk_sources(release)
     version = release['tag_name'].removeprefix('v').split('-')[0]
-    expected_apks = {f'FlClash-{version}-android-{abi}.apk'
-                     for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64')}
-    if set(apks) != expected_apks:
-        raise ValueError('Expected the upstream Android APKs for all three supported ABIs')
+    checksums = {'SHA256SUMS', f'FlClash-dev-{version}-SHA256SUMS'}
     for name in names:
         if name.endswith(('.idsig', '.asc', '.sig')):
             raise ValueError(f'Upstream signature sidecar requires explicit handling: {name}')
-        if re.search(r'(checksum|sha\d+|md5)', name, re.I) and name != 'SHA256SUMS':
+        if re.search(r'(checksum|sha\d+|md5)', name, re.I) and name not in checksums:
             raise ValueError(f'Unknown checksum manifest requires explicit handling: {name}')
 
 
@@ -156,6 +167,18 @@ def rewrite_checksums(path, assets):
     path.write_text('\n'.join(rewritten) + '\n')
 
 
+def rewrite_manifest(path, assets, checksum_name):
+    manifest = json.loads(path.read_text())
+    names = [artifact['name'] for artifact in manifest['artifacts']]
+    if manifest['checksums'] != checksum_name or len(names) != len(set(names)) or set(names) != set(assets):
+        raise ValueError('Release manifest must cover every named release artifact exactly once')
+    for artifact in manifest['artifacts']:
+        file = assets[artifact['name']]
+        artifact['sha256'] = sha256(file)
+        artifact['size'] = file.stat().st_size
+    write_json(path, manifest)
+
+
 def assemble(plan_path, android, output):
     selected = json.loads(Path(plan_path).read_text())
     release = selected['upstream']
@@ -167,29 +190,42 @@ def assemble(plan_path, android, output):
     build = json.loads((Path(android) / 'android-build.json').read_text())
     if build['upstream_tag'] != release['tag_name']:
         raise ValueError('Android build does not match the selected upstream release')
-    report = {}
+    apk_sources = android_apk_sources(release)
     with tempfile.TemporaryDirectory(prefix='flclashx-download-') as temporary:
         originals = Path(temporary)
         download_assets(release, originals)
-        expected_apks = {item['name'] for item in release['assets'] if item['name'].endswith('.apk')}
+        expected_apks = set(apk_sources.values())
         if expected_apks != set(build['apks']):
             raise ValueError('Android APK filenames differ from the upstream release')
         for asset in release['assets']:
             name = asset['name']
-            source = Path(android) / name if name.endswith('.apk') else originals / name
+            source = Path(android) / apk_sources[name] if name in apk_sources else originals / name
             if name.endswith('.apk'):
                 checked = verify_apk(source)
-                if checked != build['apks'][name]:
+                if checked != build['apks'][apk_sources[name]]:
                     raise ValueError(f'Android APK changed after validation: {name}')
             destination = output / name
             shutil.copyfile(source, destination)
-            report[name] = sha256(destination)
-        checksum = output / 'SHA256SUMS'
-        if checksum.exists():
-            rewrite_checksums(checksum, {file.name: file for file in output.iterdir() if file != checksum})
-            report[checksum.name] = sha256(checksum)
+        version = release['tag_name'].removeprefix('v').split('-')[0]
+        prefix = f'FlClash-dev-{version}-'
+        named_checksum = output / f'{prefix}SHA256SUMS'
+        legacy_checksum = output / 'SHA256SUMS'
+        manifest = output / 'manifest.json'
+        payloads = {file.name: file for file in output.iterdir()
+                    if file not in (named_checksum, legacy_checksum, manifest)}
+        if manifest.exists():
+            named = {name: file for name, file in payloads.items() if name.startswith(prefix)}
+            if not named_checksum.is_file() or not named:
+                raise ValueError('Release manifest requires its named artifacts and checksum manifest')
+            rewrite_manifest(manifest, named, named_checksum.name)
+            rewrite_checksums(named_checksum, named)
+            payloads = {name: file for name, file in payloads.items() if name not in named}
+        elif named_checksum.exists():
+            raise ValueError('Named checksum manifest requires manifest.json')
+        if legacy_checksum.exists():
+            rewrite_checksums(legacy_checksum, payloads)
     selected['build'] = build
-    selected['assets'] = report
+    selected['assets'] = {file.name: sha256(file) for file in sorted(output.iterdir())}
     write_json(output.parent / 'release-state.json', selected)
 
 

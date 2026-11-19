@@ -54,7 +54,10 @@ def dependencies(source):
     dart = os.environ.get('DART', str(Path(shutil.which(flutter) or flutter).parent / 'dart'))
     run([flutter, 'pub', 'get', '--enforce-lockfile'], cwd=source,
         env={**os.environ, 'PUB_HOSTED_URL': 'https://pub.dev'})
-    run([dart, 'run', 'intl_utils:generate'], cwd=source)
+    if (source / 'l10n.yaml').is_file():
+        run([flutter, 'gen-l10n'], cwd=source)
+    else:
+        run([dart, 'run', 'intl_utils:generate'], cwd=source)
     return flutter
 
 

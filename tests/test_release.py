@@ -24,6 +24,20 @@ def upstream_release():
     }
 
 
+def modern_upstream_release():
+    value = upstream_release()
+    value.update(tag_name='v0.9.4', name='FlClash 0.9.4')
+    names = [f'FlClash-0.9.4-android-{abi}.apk'
+             for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64')]
+    names += [f'FlClash-dev-0.9.4-android-{arch}.apk' for arch in ('arm64', 'armv7', 'amd64')]
+    names += ['FlClash-0.9.4-windows-amd64-setup.exe',
+              'FlClash-dev-0.9.4-windows-amd64-setup.exe',
+              'FlClash-dev-0.9.4-linux-arm64.deb',
+              'FlClash-dev-0.9.4-SHA256SUMS', 'SHA256SUMS', 'manifest.json']
+    value['assets'] = [{'name': name} for name in names]
+    return value
+
+
 class ReleaseTests(unittest.TestCase):
     def test_versioned_patches_preserve_existing_release_and_prerelease(self):
         old = project.patches_for('v0.9.0')
@@ -64,6 +78,16 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(patches[0].parent, project.ROOT / 'patches')
                 self.assertEqual(patches[1].parent, project.ROOT / 'patches/v0.9.3')
                 self.assertEqual(patches[2].parent, project.ROOT / 'patches/v0.9.3')
+        for tag in ('v0.9.4-pre.1', 'v0.9.4'):
+            with self.subTest(tag=tag):
+                patches = project.patches_for(tag)
+                self.assertEqual([path.name for path in patches], [
+                    '001-android-package.patch', '003-remove-startup-disclaimer.patch',
+                    '004-update-repository.patch',
+                ])
+                self.assertEqual(patches[0].parent, project.ROOT / 'patches')
+                self.assertEqual(patches[1].parent, project.ROOT / 'patches/v0.9.4')
+                self.assertEqual(patches[2].parent, project.ROOT / 'patches/v0.9.4')
         with self.assertRaises(ValueError):
             project.patches_for('../main')
 
@@ -120,6 +144,100 @@ class ReleaseTests(unittest.TestCase):
                 value['assets'].append({'name': name})
                 with self.assertRaises(ValueError):
                     release.validate_release(value)
+
+    def test_accepts_modern_apk_aliases_but_rejects_unknown_or_incomplete_sets(self):
+        value = modern_upstream_release()
+        release.validate_release(value)
+        for name in ('other.apk', 'FlClash-other-0.9.4-SHA256SUMS', 'SHA512SUMS'):
+            with self.subTest(name=name):
+                changed = copy.deepcopy(value)
+                changed['assets'].append({'name': name})
+                with self.assertRaises(ValueError):
+                    release.validate_release(changed)
+        for name in ('FlClash-dev-0.9.4-android-arm64.apk', 'FlClash-0.9.4-android-arm64-v8a.apk'):
+            changed = copy.deepcopy(value)
+            changed['assets'] = [asset for asset in changed['assets'] if asset['name'] != name]
+            with self.assertRaises(ValueError):
+                release.validate_release(changed)
+
+    def test_assemble_replaces_both_apk_names_and_rewrites_all_release_metadata(self):
+        value = modern_upstream_release()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            android = root / 'android'
+            android.mkdir()
+            originals = {asset['name']: asset['name'].encode() for asset in value['assets']}
+            payloads = {name: data for name, data in originals.items()
+                        if name not in ('manifest.json', 'SHA256SUMS', 'FlClash-dev-0.9.4-SHA256SUMS')}
+            named = {name: data for name, data in payloads.items() if name.startswith('FlClash-dev-')}
+            manifest = {
+                'checksums': 'FlClash-dev-0.9.4-SHA256SUMS',
+                'artifacts': [{'name': name, 'sha256': 'a' * 64, 'size': len(data),
+                               'line': 'dev', 'channel': 'stable', 'commit': 'upstream-commit'}
+                              for name, data in named.items()],
+            }
+            originals['manifest.json'] = json.dumps(manifest).encode()
+            for checksum, names in (
+                ('FlClash-dev-0.9.4-SHA256SUMS', named),
+                ('SHA256SUMS', payloads.keys() - named.keys()),
+            ):
+                originals[checksum] = ''.join('a' * 64 + f'  {name}\n' for name in sorted(names)).encode()
+            build = {'upstream_tag': 'v0.9.4', 'apks': {}}
+            for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64'):
+                apk = android / f'FlClash-0.9.4-android-{abi}.apk'
+                apk.write_bytes(f'rebuilt-{abi}'.encode())
+                build['apks'][apk.name] = {
+                    'sha256': project.sha256(apk),
+                    'certificate_sha256': project.config()['certificate_sha256'],
+                }
+            project.write_json(android / 'android-build.json', build)
+            project.write_json(root / 'plan.json', {'upstream': value})
+
+            def download(_, destination):
+                destination.mkdir(parents=True, exist_ok=True)
+                for name, data in originals.items():
+                    (destination / name).write_bytes(data)
+
+            output = root / 'release'
+            with patch.object(release, 'download_assets', side_effect=download), \
+                    patch.object(release, 'verify_apk', side_effect=lambda file: build['apks'][file.name]):
+                release.assemble(root / 'plan.json', android, output)
+            self.assertEqual({file.name for file in output.iterdir()}, set(originals))
+            for arch, abi in (('arm64', 'arm64-v8a'), ('armv7', 'armeabi-v7a'), ('amd64', 'x86_64')):
+                expected = f'rebuilt-{abi}'.encode()
+                self.assertEqual((output / f'FlClash-0.9.4-android-{abi}.apk').read_bytes(), expected)
+                self.assertEqual((output / f'FlClash-dev-0.9.4-android-{arch}.apk').read_bytes(), expected)
+            for name in payloads:
+                if not name.endswith('.apk'):
+                    self.assertEqual((output / name).read_bytes(), originals[name])
+            rewritten = json.loads((output / 'manifest.json').read_text())
+            self.assertEqual(rewritten['checksums'], manifest['checksums'])
+            for artifact in rewritten['artifacts']:
+                file = output / artifact['name']
+                self.assertEqual(artifact['sha256'], project.sha256(file))
+                self.assertEqual(artifact['size'], file.stat().st_size)
+                self.assertEqual(artifact['commit'], 'upstream-commit')
+                self.assertEqual(artifact['channel'], 'stable')
+            for checksum in ('SHA256SUMS', 'FlClash-dev-0.9.4-SHA256SUMS'):
+                for line in (output / checksum).read_text().splitlines():
+                    digest, name = line.split()
+                    self.assertEqual(digest, project.sha256(output / name))
+            state = json.loads((root / 'release-state.json').read_text())
+            self.assertEqual(state['assets'], {name: project.sha256(output / name) for name in originals})
+
+    def test_manifest_rejects_missing_duplicate_or_unknown_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            apk = root / 'android.apk'
+            apk.write_bytes(b'rebuilt')
+            path = root / 'manifest.json'
+            for names, checksum in (([], 'SUMS'), (['android.apk'] * 2, 'SUMS'),
+                                    (['../android.apk'], 'SUMS'), (['android.apk'], '../SUMS')):
+                with self.subTest(names=names, checksum=checksum):
+                    project.write_json(path, {'checksums': checksum,
+                                              'artifacts': [{'name': name} for name in names]})
+                    with self.assertRaises(ValueError):
+                        release.rewrite_manifest(path, {'android.apk': apk}, 'SUMS')
 
     def test_checksum_rewrite_covers_desktop_and_rebuilt_android(self):
         with tempfile.TemporaryDirectory() as temporary:
