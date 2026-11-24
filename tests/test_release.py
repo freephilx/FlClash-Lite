@@ -342,11 +342,54 @@ class ReleaseTests(unittest.TestCase):
                                            for path in project.patches_for(other)}
                 self.assertFalse(release.is_current(state, value, remote))
 
+    def test_plan_skips_prereleases_and_finds_stable_changes(self):
+        current = upstream_release()
+        upcoming = copy.deepcopy(current)
+        upcoming.update(tag_name='v0.9.5', published_at='2026-11-24T00:00:00Z')
+        for asset in upcoming['assets']:
+            asset['name'] = asset['name'].replace('0.9.0', '0.9.5')
+        excluded = [
+            {**current, 'tag_name': tag, 'prerelease': prerelease, 'draft': draft,
+             'published_at': '2026-11-22T00:00:00Z', 'assets': []}
+            for tag, prerelease, draft in (
+                ('v0.9.5-pre.1', True, False), ('v0.9.5-rs.1', True, False),
+                ('v0.9.5-beta.1', False, False), ('v0.9.6', True, False),
+                ('v0.9.7', False, True),
+            )
+        ]
+        for pending in (None, upcoming):
+            with self.subTest(pending=pending is not None), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project.write_json(root / 'releases/v0.9.0.json', {})
+                candidates = [*excluded, current]
+                if pending is not None:
+                    candidates.insert(0, pending)
+                output = root / 'plan.json'
+                with patch.object(release, 'ROOT', root), \
+                        patch.object(release, 'api', return_value=current), \
+                        patch.object(release, 'list_releases', side_effect=[candidates, []]), \
+                        patch.object(release, 'is_current', return_value=True):
+                    release.plan(None, output)
+                selected = json.loads(output.read_text())
+                if pending is None:
+                    self.assertIsNone(selected)
+                else:
+                    self.assertEqual(selected['upstream'], upcoming)
+
+    def test_rejects_non_stable_releases_before_attachment_validation(self):
+        for changes in ({'prerelease': True}, {'draft': True},
+                        {'tag_name': 'v0.9.5-pre.1'}, {'tag_name': 'v0.9.5-rs.1'}):
+            with self.subTest(changes=changes):
+                value = {**upstream_release(), **changes, 'assets': []}
+                with self.assertRaisesRegex(ValueError, 'Only published stable releases'):
+                    release.validate_release(value)
+
     def test_invalid_tag_never_reaches_github(self):
-        with patch.object(release, 'api') as api:
-            with self.assertRaises(ValueError):
-                release.plan('../main', Path('unused'))
-            api.assert_not_called()
+        for tag in ('../main', 'v0.9.5-pre.1', 'v0.9.5-rs.1', 'v0.9.5-beta.1'):
+            with self.subTest(tag=tag), patch.object(release, 'api') as api:
+                with self.assertRaises(ValueError):
+                    release.plan(tag, Path('unused'))
+                api.assert_not_called()
 
 
 class ApkVerificationTests(unittest.TestCase):

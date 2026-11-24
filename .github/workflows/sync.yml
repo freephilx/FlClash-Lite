@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Upstream tag; leave empty to find the next changed release'
+        description: 'Upstream stable tag (vX.Y.Z); leave empty to find the next changed stable release'
         required: false
         type: string
       publish:

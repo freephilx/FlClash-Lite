@@ -51,9 +51,14 @@ def android_apk_sources(release):
     raise ValueError('Expected the upstream Android APKs for all three supported ABIs')
 
 
+def is_stable_release(release):
+    return (not release['draft'] and not release['prerelease']
+            and re.fullmatch(r'v\d+\.\d+\.\d+', release['tag_name']) is not None)
+
+
 def validate_release(release):
-    if release['draft'] or not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', release['tag_name']):
-        raise ValueError('Only published version-tagged releases are supported')
+    if not is_stable_release(release):
+        raise ValueError('Only published stable releases with tags such as v0.9.1 are supported')
     names = [asset['name'] for asset in release['assets']]
     if len(names) != len(set(names)):
         raise ValueError('Duplicate upstream asset names')
@@ -115,13 +120,13 @@ def plan(tag, output):
     cfg = config()
     upstream = cfg['upstream_repository']
     if tag:
-        if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', tag):
-            raise ValueError('Expected an upstream release tag such as v0.9.1')
+        if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+            raise ValueError('Expected an upstream stable release tag such as v0.9.1')
         candidates = [api(f'repos/{upstream}/releases/tags/{tag}')]
     else:
         baseline = api(f'repos/{upstream}/releases/tags/{cfg["first_release"]}')
         candidates = [item for item in list_releases(upstream)
-                      if not item['draft'] and item['published_at'] >= baseline['published_at']]
+                      if is_stable_release(item) and item['published_at'] >= baseline['published_at']]
         candidates.sort(key=lambda release: release['published_at'])
     remote_releases = {item['tag_name']: item for item in list_releases(cfg['destination_repository'])}
     chosen = None
