@@ -42,13 +42,12 @@ def android_apk_sources(release):
     previous = {name.replace('FlClash-', 'FlClash-dev-', 1): source
                 for name, source in modern.items()}
     names = {asset['name'] for asset in release['assets'] if asset['name'].endswith('.apk')}
-    if names == set(legacy):
-        return legacy
-    if names == legacy.keys() | modern.keys():
-        return {**legacy, **modern}
-    if names == legacy.keys() | previous.keys():
-        return {**legacy, **previous}
-    raise ValueError('Expected the upstream Android APKs for all three supported ABIs')
+    for sources in (legacy, modern, {**legacy, **modern}, {**legacy, **previous},
+                    {**modern, **previous}):
+        if names == sources.keys():
+            return sources
+    raise ValueError(f'{release["tag_name"]}: expected Android APKs for all three supported ABIs; '
+                     f'found {sorted(names)}')
 
 
 def is_stable_release(release):
@@ -217,27 +216,30 @@ def assemble(plan_path, android, output):
             destination = output / name
             shutil.copyfile(source, destination)
         version = release['tag_name'].removeprefix('v').split('-')[0]
-        prefix = f'FlClash-{version}-'
-        if any(name.startswith('FlClash-dev-') for name in apk_sources):
-            prefix = f'FlClash-dev-{version}-'
-        named_checksum = output / f'{prefix}SHA256SUMS'
-        legacy_checksum = output / 'SHA256SUMS'
+        checksum_names = {'SHA256SUMS', f'FlClash-{version}-SHA256SUMS',
+                          f'FlClash-dev-{version}-SHA256SUMS'}
+        checksums = {output / name for name in checksum_names if (output / name).is_file()}
         manifest = output / 'manifest.json'
         payloads = {file.name: file for file in output.iterdir()
-                    if file not in (named_checksum, legacy_checksum, manifest)}
+                    if file.name not in checksum_names and file != manifest}
         covered = set()
         if manifest.exists():
-            names = {artifact['name'] for artifact in json.loads(manifest.read_text())['artifacts']}
+            metadata = json.loads(manifest.read_text())
+            if metadata['checksums'] not in checksum_names - {'SHA256SUMS'}:
+                raise ValueError('Release manifest requires a supported named checksum manifest')
+            named_checksum = output / metadata['checksums']
+            names = {artifact['name'] for artifact in metadata['artifacts']}
             named = {name: file for name, file in payloads.items() if name in names}
             if not named_checksum.is_file() or not named:
                 raise ValueError('Release manifest requires its named artifacts and checksum manifest')
             rewrite_manifest(manifest, named, named_checksum.name)
             covered.update(rewrite_checksums(named_checksum, named))
-        elif named_checksum.exists():
+            checksums.remove(named_checksum)
+        elif any(path.name != 'SHA256SUMS' for path in checksums):
             raise ValueError('Named checksum manifest requires manifest.json')
-        if legacy_checksum.exists():
-            covered.update(rewrite_checksums(legacy_checksum, payloads, require_all=False))
-        if (manifest.exists() or legacy_checksum.exists()) and covered != set(payloads):
+        for checksum in sorted(checksums):
+            covered.update(rewrite_checksums(checksum, payloads, require_all=False))
+        if (manifest.exists() or checksums) and covered != set(payloads):
             raise ValueError('Checksum manifests must cover every release attachment')
     selected['build'] = build
     selected['assets'] = {file.name: sha256(file) for file in sorted(output.iterdir())}

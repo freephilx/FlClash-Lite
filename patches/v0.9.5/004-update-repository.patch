@@ -1,0 +1,9 @@
+diff --git a/lib/common/constant.dart b/lib/common/constant.dart
+index b3c7a037..3aa9c522 100644
+--- a/lib/common/constant.dart
++++ b/lib/common/constant.dart
+@@ -136,3 +136,3 @@ const bootRecordKey = 'boot_record';
+ const appliedConfigMd5Key = 'applied_config_md5';
+-const repository = 'chen08209/FlClash';
++const repository = 'freephilx/FlClash-Lite';
+ const maxMobileWidth = 600;
